@@ -14,6 +14,8 @@ provider "aws" {
 
 resource "aws_vpc" "Daniel-vpc" {
   cidr_block = "10.1.0.0/16"
+  enable_dns_support = true
+  enable_dns_hostnames = true
   tags = {
     Name = "Daniel-VPC"
   }
@@ -47,7 +49,7 @@ resource "aws_subnet" "Daniel-subnet-spoke2" {
 }
 
 resource "aws_security_group" "daniel-sg-mgmt" {
-  name        = "allow_ssh_and_http_for_mgmt"
+  name        = "allow_ssh_and_http_for_mgmt_and_endpoints"
   description = "Allow SSH and HTTP traffic"
   vpc_id      = aws_vpc.Daniel-vpc.id
 
@@ -63,6 +65,22 @@ resource "aws_security_group" "daniel-sg-mgmt" {
     description = "HTTP"
     from_port   = 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["10.1.0.0/16"]
+  }
+
+  ingress {
+    description = "ICMP"
+    from_port   = -1
+    to_port     = -1
+    protocol    = "icmp"
+    cidr_blocks = ["10.1.0.0/16"]
+  }
+  
+  ingress {
+    description = "SSM Session Manager"
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["10.1.0.0/16"]
   }
@@ -90,7 +108,6 @@ resource "aws_security_group" "daniel-sg-spoke2" {
     to_port     = 22
     protocol    = "tcp"
     security_groups = [aws_security_group.daniel-sg-mgmt.id]
-    # Allow SSH from the management security group
   }
 
   ingress {
@@ -99,7 +116,14 @@ resource "aws_security_group" "daniel-sg-spoke2" {
     to_port     = 80
     protocol    = "tcp"
     security_groups = [aws_security_group.daniel-sg-mgmt.id]
-    # Allow SSH from the management security group
+  }
+
+  ingress {
+    description = "ICMP"
+    from_port   = -1
+    to_port     = -1
+    protocol    = "icmp"
+    security_groups = [aws_security_group.daniel-sg-mgmt.id]
   }
 
   egress {
@@ -114,9 +138,46 @@ resource "aws_security_group" "daniel-sg-spoke2" {
   }
 }
 
+resource "aws_vpc_endpoint" "SSM_for_Session_Manager" {
+  vpc_id            = aws_vpc.Daniel-vpc.id
+  service_name      = "com.amazonaws.us-east-1.ssm"
+  vpc_endpoint_type = "Interface"
+  subnet_ids = [aws_subnet.Daniel-subnet-mgmt.id]
+  security_group_ids = [aws_security_group.daniel-sg-mgmt.id]
+  private_dns_enabled = true
+  tags = {
+    Name = "SSM-Endpoint-Mgmt"
+  }
+}
+
+resource "aws_vpc_endpoint" "SSM_Messages_for_Session_Manager" {
+  vpc_id            = aws_vpc.Daniel-vpc.id
+  service_name      = "com.amazonaws.us-east-1.ssmmessages"
+  vpc_endpoint_type = "Interface"
+  subnet_ids = [aws_subnet.Daniel-subnet-mgmt.id]
+  security_group_ids = [aws_security_group.daniel-sg-mgmt.id]
+  private_dns_enabled = true
+  tags = {
+    Name = "SSM-Messages-Endpoint-Mgmt"
+  }
+}
+
+resource "aws_vpc_endpoint" "EC2_Messages_for_Session_Manager" {
+  vpc_id            = aws_vpc.Daniel-vpc.id
+  service_name      = "com.amazonaws.us-east-1.ec2messages"
+  vpc_endpoint_type = "Interface"
+  subnet_ids = [aws_subnet.Daniel-subnet-mgmt.id]
+  security_group_ids = [aws_security_group.daniel-sg-mgmt.id]
+  private_dns_enabled = true
+  tags = {
+    Name = "EC2_Messages-Endpoint-Mgmt"
+  }
+}
+
 resource "aws_instance" "my-server-mgmt" {
-  ami           = "ami-05ffe3c48a9991133"
-  instance_type = "t2.micro"
+  ami           = "ami-0fa71268a899c2733"
+  instance_type = "t3.small"
+  iam_instance_profile = "SSM_RDP"
   key_name = var.key_name
   subnet_id = aws_subnet.Daniel-subnet-mgmt.id
   vpc_security_group_ids = [aws_security_group.daniel-sg-mgmt.id]
@@ -126,8 +187,9 @@ resource "aws_instance" "my-server-mgmt" {
 }
 
 resource "aws_instance" "my-server-spoke2" {
-  ami           = "ami-05ffe3c48a9991133"
-  instance_type = "t2.micro"
+  ami           = "ami-0fa71268a899c2733"
+  instance_type = "t3.small"
+  iam_instance_profile = "SSM_RDP"
   key_name = var.key_name
   subnet_id = aws_subnet.Daniel-subnet-spoke2.id
   vpc_security_group_ids = [aws_security_group.daniel-sg-spoke2.id]
